@@ -10,6 +10,8 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -132,41 +134,68 @@ func (r *PersonResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether timesheet submission is disabled for this person.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"virtual": schema.BoolAttribute{
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Whether this is a virtual/placeholder record.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 
 			// --- Computed ---
 			"status": schema.Int64Attribute{
 				Computed:            true,
 				MarkdownDescription: "Person status: 1 = active, 2 = deactivated.",
+				PlanModifiers: []planmodifier.Int64{
+					int64planmodifier.UseStateForUnknown(),
+				},
 			},
 			"created_at": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Timestamp when the person was created (ISO 8601).",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"invited_at": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Timestamp when the invitation was sent (ISO 8601), or null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"last_seen_at": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Timestamp of the person's last activity (ISO 8601), or null.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"is_user": schema.BoolAttribute{
 				Computed:            true,
 				MarkdownDescription: "Whether this person has a login account.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"avatar_url": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "URL of the person's avatar thumbnail.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"two_factor_auth": schema.BoolAttribute{
 				Computed:            true,
 				MarkdownDescription: "Whether two-factor authentication is enabled.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -240,9 +269,23 @@ func (r *PersonResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
-	person, err := r.client.UpdatePerson(ctx, data.ID.ValueString(), modelToWriteAttrs(data))
+	sent := modelToWriteAttrs(data)
+	person, err := r.client.UpdatePerson(ctx, data.ID.ValueString(), sent)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating person", err.Error())
+		return
+	}
+
+	if rejected := detectRejectedFields(sent, person.Attributes); len(rejected) > 0 {
+		resp.Diagnostics.AddError(
+			"API silently rejected field updates",
+			fmt.Sprintf(
+				"The Productive.io API accepted the request but did not apply changes to: %s. "+
+					"This usually means your API token lacks permission to modify these fields. "+
+					"Use a token with full admin access or update these fields in the Productive.io UI.",
+				strings.Join(rejected, ", "),
+			),
+		)
 		return
 	}
 
@@ -390,4 +433,58 @@ func personDataToModel(person *PersonData, data *PersonResourceModel) {
 	} else {
 		data.LastSeenAt = types.StringNull()
 	}
+}
+
+// detectRejectedFields compares the values sent in the write request against
+// what the API returned. Any field that was sent but came back unchanged is
+// reported by name. The Productive.io API silently ignores fields the token
+// lacks permission to modify (HTTP 200, no error), so this is the only way
+// to surface the problem.
+func detectRejectedFields(sent personWriteAttrs, got PersonAttributes) []string {
+	var rejected []string
+
+	if sent.FirstName != got.FirstName {
+		rejected = append(rejected, "first_name")
+	}
+	if sent.LastName != got.LastName {
+		rejected = append(rejected, "last_name")
+	}
+	if sent.Email != got.Email {
+		rejected = append(rejected, "email")
+	}
+	if sent.Title != "" && sent.Title != got.Title {
+		rejected = append(rejected, "title")
+	}
+	if sent.Nickname != "" && sent.Nickname != got.Nickname {
+		rejected = append(rejected, "nickname")
+	}
+	if sent.TagList != "" && sent.TagList != strings.Join(got.TagList, ",") {
+		rejected = append(rejected, "tag_list")
+	}
+	if sent.RoleID != nil && (got.RoleID == nil || *sent.RoleID != *got.RoleID) {
+		rejected = append(rejected, "role_id")
+	}
+	if sent.CompanyID != nil && (got.CompanyID == nil || *sent.CompanyID != *got.CompanyID) {
+		rejected = append(rejected, "company_id")
+	}
+	if sent.ManagerID != nil && (got.ManagerID == nil || *sent.ManagerID != *got.ManagerID) {
+		rejected = append(rejected, "manager_id")
+	}
+	if sent.SubsidiaryID != nil && (got.SubsidiaryID == nil || *sent.SubsidiaryID != *got.SubsidiaryID) {
+		rejected = append(rejected, "subsidiary_id")
+	}
+	if sent.CustomRoleID != nil && (got.CustomRoleID == nil || *sent.CustomRoleID != *got.CustomRoleID) {
+		rejected = append(rejected, "custom_role_id")
+	}
+	if sent.TimeTrackingPolicyID != nil && (got.TimeTrackingPolicyID == nil || *sent.TimeTrackingPolicyID != *got.TimeTrackingPolicyID) {
+		rejected = append(rejected, "time_tracking_policy_id")
+	}
+	if sent.TimesheetSubmissionDisabled != nil && *sent.TimesheetSubmissionDisabled != got.TimesheetSubmissionDisabled {
+		rejected = append(rejected, "timesheet_submission_disabled")
+	}
+	if sent.Virtual != nil && *sent.Virtual != got.Virtual {
+		rejected = append(rejected, "virtual")
+	}
+
+	return rejected
 }

@@ -22,7 +22,7 @@ Generate an API token at **Settings > API Integrations > Generate new token** in
 terraform {
   required_providers {
     productive = {
-      source  = "productive-io/productive"
+      source  = "tenvalleys/productive"
       version = "~> 0.1.0"
     }
   }
