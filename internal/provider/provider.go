@@ -5,7 +5,7 @@ package provider
 
 import (
 	"context"
-	"net/http"
+	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -17,92 +17,104 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Ensure ScaffoldingProvider satisfies various provider interfaces.
-var _ provider.Provider = &ScaffoldingProvider{}
-var _ provider.ProviderWithFunctions = &ScaffoldingProvider{}
-var _ provider.ProviderWithEphemeralResources = &ScaffoldingProvider{}
-var _ provider.ProviderWithActions = &ScaffoldingProvider{}
+var _ provider.Provider = &ProductiveProvider{}
 
-// ScaffoldingProvider defines the provider implementation.
-type ScaffoldingProvider struct {
-	// version is set to the provider version on release, "dev" when the
-	// provider is built and ran locally, and "test" when running acceptance
-	// testing.
+type ProductiveProvider struct {
 	version string
 }
 
-// ScaffoldingProviderModel describes the provider data model.
-type ScaffoldingProviderModel struct {
-	Endpoint types.String `tfsdk:"endpoint"`
+type ProductiveProviderModel struct {
+	Token          types.String `tfsdk:"token"`
+	OrganizationID types.String `tfsdk:"organization_id"`
 }
 
-func (p *ScaffoldingProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "scaffolding"
+func (p *ProductiveProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "productive"
 	resp.Version = p.version
 }
 
-func (p *ScaffoldingProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *ProductiveProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		MarkdownDescription: "Provider for managing resources in [Productive.io](https://productive.io). " +
+			"Credentials can be supplied via the provider block or through the " +
+			"`PRODUCTIVE_TOKEN` and `PRODUCTIVE_ORGANIZATION_ID` environment variables.",
 		Attributes: map[string]schema.Attribute{
-			"endpoint": schema.StringAttribute{
-				MarkdownDescription: "Example provider attribute",
+			"token": schema.StringAttribute{
 				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "Productive.io API token. May also be set via `PRODUCTIVE_TOKEN`.",
+			},
+			"organization_id": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Productive.io organization ID. May also be set via `PRODUCTIVE_ORGANIZATION_ID`.",
 			},
 		},
 	}
 }
 
-func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var data ScaffoldingProviderModel
-
+func (p *ProductiveProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data ProductiveProviderModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
-
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
-	// Configuration values are now available.
-	// if data.Endpoint.IsNull() { /* ... */ }
+	token := os.Getenv("PRODUCTIVE_TOKEN")
+	if !data.Token.IsNull() && !data.Token.IsUnknown() {
+		token = data.Token.ValueString()
+	}
 
-	// Example client configuration for data sources and resources
-	client := http.DefaultClient
-	resp.DataSourceData = client
+	organizationID := os.Getenv("PRODUCTIVE_ORGANIZATION_ID")
+	if !data.OrganizationID.IsNull() && !data.OrganizationID.IsUnknown() {
+		organizationID = data.OrganizationID.ValueString()
+	}
+
+	if token == "" {
+		resp.Diagnostics.AddError(
+			"Missing Productive.io API token",
+			"Set the `token` provider attribute or the `PRODUCTIVE_TOKEN` environment variable.",
+		)
+	}
+	if organizationID == "" {
+		resp.Diagnostics.AddError(
+			"Missing Productive.io organization ID",
+			"Set the `organization_id` provider attribute or the `PRODUCTIVE_ORGANIZATION_ID` environment variable.",
+		)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	client := NewClient(token, organizationID)
 	resp.ResourceData = client
+	resp.DataSourceData = client
 }
 
-func (p *ScaffoldingProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *ProductiveProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
-		NewExampleResource,
+		NewPersonResource,
 	}
 }
 
-func (p *ScaffoldingProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
-	return []func() ephemeral.EphemeralResource{
-		NewExampleEphemeralResource,
-	}
+func (p *ProductiveProvider) DataSources(_ context.Context) []func() datasource.DataSource {
+	return []func() datasource.DataSource{}
 }
 
-func (p *ScaffoldingProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{
-		NewExampleDataSource,
-	}
+func (p *ProductiveProvider) Functions(_ context.Context) []func() function.Function {
+	return []func() function.Function{}
 }
 
-func (p *ScaffoldingProvider) Functions(ctx context.Context) []func() function.Function {
-	return []func() function.Function{
-		NewExampleFunction,
-	}
+func (p *ProductiveProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{}
 }
 
-func (p *ScaffoldingProvider) Actions(ctx context.Context) []func() action.Action {
-	return []func() action.Action{
-		NewExampleAction,
-	}
+func (p *ProductiveProvider) Actions(_ context.Context) []func() action.Action {
+	return []func() action.Action{}
 }
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &ScaffoldingProvider{
+		return &ProductiveProvider{
 			version: version,
 		}
 	}
